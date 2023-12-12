@@ -7,7 +7,22 @@ object MLR extends App {
   conf.setMaster("local[4]")
   val sc = new SparkContext(conf)
 
-  def parseTweet(tweet: String): Tweet = ???
+  val tweets: RDD[Tweet] = sc.textFile("data/twitter/tweetsraw")
+      //first parse the tweets, filter the ones that are not defined and then get all the tweets out of the option
+                  .map(Tweet.parse).filter(_.isDefined).map(_.get).persist()
 
-  val tweets = sc.textFile("/data/twitter/tweetraw").map(parseTweet)
+  //Get the number of tweets
+  val numberOfTweets = tweets.count()
+
+  //For each tweet, get the like amount
+  val likes = tweets.map(_.likes)
+
+  //Print the likes
+  println("Likes: " + likes.collect().mkString(", "))
+
+  //Print the amount of tweets
+  println("Number of tweets: " + numberOfTweets)
+
+  System.in.read() // Keep the application active.
+
 }

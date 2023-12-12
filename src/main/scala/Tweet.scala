@@ -1,23 +1,36 @@
 //get Tag and Likes from Metrics
-import Metrics.{Tag, Likes}
+import Metrics.{Tag, Likes, ID}
 import upickle.default._
 
 
-case class Tweet(text: String,
-                 user: String,
+case class Tweet(id: ID, text: String,
+                 user: User,
                  hashTags: Array[Tag],
-                 likes: Likes)
+                 likes: Likes) {
+
+  //Get the number of hashtags
+  def numberOfHashTags: Int = hashTags.length
+
+  //Get the length of the tweet
+  def length: Int = text.length
+
+  //Overwrite the toString method to display all hashtags via mkString
+  override def toString: String = {
+    s"Tweet($id, $text, $user, ${hashTags.mkString("[", ",", "]")}, $likes)"
+  }
+}
 
 object Tweet {
   // parseTweet should have a signature that accepts a ujson.Value and returns a Tweet
   def parseTweet(json: ujson.Value): Tweet = {
     // Parse the JSON to create a Tweet object
+    val id = json("id_str").str
     val text = json("text").str
-    val user = json("user")("screen_name").str
-    val hashTags = json("entities")("hashtags").arr.map(_ ("text").str).toArray
+    val user = User.parseUser(json("user"))
+    val hashTags = json("entities")("hashtags").arr.map(_("text").str).toArray
     val likes = json("favorite_count").num.toInt
     //Return the Tweet object
-    Tweet(text, user, hashTags, likes)
+    Tweet(id, text, user, hashTags, likes)
   }
 
   // The parse method signature remains the same
