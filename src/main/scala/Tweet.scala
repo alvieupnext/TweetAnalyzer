@@ -18,6 +18,12 @@ case class Tweet(id: ID, text: String,
   override def toString: String = {
     s"Tweet($id, $text, $user, ${hashTags.mkString("[", ",", "]")}, $likes)"
   }
+
+  //Change equality to only check the id
+  override def equals(obj: Any): Boolean = obj match {
+    case tweet: Tweet => tweet.id == id
+    case _ => false
+  }
 }
 
 object Tweet {
