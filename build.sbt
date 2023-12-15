@@ -7,9 +7,9 @@ lazy val root = (project in file("."))
     name := "BDAssignment"
   )
 
-libraryDependencies += "org.apache.spark" %% "spark-core" % "3.3.0"
+libraryDependencies += "org.apache.spark" %% "spark-core" % "3.3.2"
 
-libraryDependencies += "org.apache.spark" %% "spark-sql" % "3.3.0"
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "3.3.2"
 
-libraryDependencies += "com.lihaoyi" %% "upickle" % "1.3.15"
+libraryDependencies += "com.lihaoyi" %% "upickle" % "3.0.0"
 
