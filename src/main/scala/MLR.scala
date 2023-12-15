@@ -4,6 +4,8 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, KeyValueGroupedDataset, SparkSession}
 import org.apache.spark.{SparkConf, SparkContext}
 
+import scala.annotation.tailrec
+
 object MLR extends App {
   val conf = new SparkConf()
   conf.setAppName("Datasets Test")
@@ -40,22 +42,11 @@ object MLR extends App {
   //Make it a Float to make sure the division is a float division
   val totalHashtagCount = hashtags.count().toFloat
 
-//  //Sort the hashtagCount in descending order, in case of a tie, sort by the hashtag alphabetically
-//  val sortedHashtagCounts = hashtagCounts.sort($"count(1)".desc, $"key".asc).persist()
-//
-//  //print the sortedHashtagCounts
-//  println("Sorted hashtag counts: " + sortedHashtagCounts.collect().mkString(", "))
-
-//  //Divide the hashtags into groups
-//  val amountOfHashtagGroups = 2
-
-  //Based on the totalHashtag
-
   //Then we divide the amount of times a hashtag has appeared by the total amount of hashtags to get a distribution
   val hashtagDistribution = hashtagCounts.map(h => (h._1, h._2 / totalHashtagCount))
 
   //Get the highest distribution
-  val highestDistribution = hashtagDistribution.sort($"_2".desc).first()._2
+  val highestDistribution = hashtagDistribution.map(_._2).reduce((a, b) => if (a > b) a else b)
 
   val amountOfHashtagGroups = 10
 
@@ -75,7 +66,7 @@ object MLR extends App {
   //Group the hashtag scores by tweet and collect the scores
   val tweetScoresGrouped: Dataset[(Tweet, Array[Int])] = hashtagDistributionGrouped.mapGroups { (tweet, scoresIterator) =>
     (tweet, scoresIterator.map(_._2).toArray)
-  }.persist()
+  }
 
   //Procedure for transforming the hashtag scores to features
   def hashtagScoresToFeatures(scores: Array[Int]): Array[Feature] = {
@@ -97,18 +88,21 @@ object MLR extends App {
 
   def extractFeatures(tweets: Dataset[(Tweet, Array[Float])]): Dataset[FeatureTuple] = {
     //Extract the features from the tweets
-    tweets.map(tweetTuple => { case (tweet: Tweet, hashtagFeatures) =>
+    tweets.map{ case (tweet: Tweet, hashtagFeatures) =>
       //Get the features from the tweet
       val tweetLength = tweet.length.toFloat
       val user = tweet.user
       val userFeatures: Array[Float] = user.features
       //Return the features, remember to add x0 = 1
       (Array(1f, tweetLength) ++ userFeatures ++ hashtagFeatures, tweet.likes)
-    })
+    }
   }
 
   //Extract the features from the tweets
-  val featureDataset: Dataset[FeatureTuple] = extractFeatures(tweetFeatures)
+  val featureDataset: Dataset[FeatureTuple] = extractFeatures(tweetFeatures).persist()
+
+  //Get the amount of tweets (via counting the scaled Features)
+  val amountOfFeatures = featureDataset.count().toFloat
 
   //A procedure to scale the features by normalizing them
   def scaleFeatures(features: Dataset[FeatureTuple]): Dataset[FeatureTuple] = {
@@ -116,18 +110,18 @@ object MLR extends App {
     val featureArray = features.map(_._1)
 
     // Calculate the mean and standard deviation for each feature
-    val mean = featureArray
+    val mean: Array[Float] = featureArray
       .reduce((a, b) => a.zip(b).map { case (x, y) => x + y })
-      .map(_ / features.count())
+      .map(_ / amountOfFeatures)
 
     //Print the mean
     println("Mean: " + arrayFeatureToString(mean))
 
     //Calculate the standard deviation
-    val stddev = featureArray
+    val stddev: Array[Float] = featureArray
       .map(f => f.zip(mean).map { case (x, y) => Math.pow(x - y, 2) })
       .reduce((a, b) => a.zip(b).map { case (x, y) => x + y })
-      .map(_ / features.count())
+      .map(_ / amountOfFeatures)
       .map(math.sqrt)
       .map(_.toFloat)
 
@@ -156,37 +150,55 @@ object MLR extends App {
   type Theta = Array[Float]
 
   def cost(features: Dataset[FeatureTuple], theta: Theta): Float = {
-    //Get the amount of tweets (via counting the features)
-    val m = features.count().toFloat
     //Calculate the cost
     val cost = features.map { case (f, label) =>
       val h = f.zip(theta).map { case (x, y) => x * y }.sum
       Math.pow(h - label, 2)
     }.reduce(_ + _)
     //Return the cost
-    cost.toFloat / (2 * m)
+    cost.toFloat / (2 * amountOfFeatures)
   }
 
-  //Gradient descent
-//  def gradientDescent(features: Dataset[FeatureTuple], theta: Theta, alpha: Float, iterations: Int): Theta = {
-//    //Get the amount of tweets (via counting the features)
-//    val m = features.count().toFloat
-//    //For each iteration, update theta
-//    val updatedTheta = (0 until iterations).foldLeft(theta) { case (theta, _) =>
-//      //Calculate the new theta
-//      val newTheta = theta.zipWithIndex.map { case (theta, j) =>
-//        val h = features.map { case (f, label) =>
-//          val h = f.zip(theta).map { case (x, y) => x * y }.sum
-//          (h - label) * f(j)
-//        }.reduce(_ + _)
-//        theta - alpha * h.toFloat / m
-//      }
-//      //Return the new theta
-//      newTheta
-//    }
-//    //Return the updated theta
-//    updatedTheta
-//  }
+  def gradientDescent(features: Dataset[FeatureTuple], theta: Theta, alpha: Float, sigma: Float, maxIterations: Int): Theta = {
+    var error = cost(features, theta)
+    var newTheta = theta
+    var iteration = 0
+
+    while (iteration < maxIterations) {
+      newTheta = newTheta.zipWithIndex.map { case (currentTheta, j) =>
+        val h = features.map { case (f, label) =>
+          val h = f.zip(newTheta).map { case (x, y) => x * y }.sum
+          (h - label) * f(j)
+        }.reduce(_ + _)
+        currentTheta - alpha * h / amountOfFeatures
+      }
+
+      val newCost = cost(features, newTheta)
+      val newDelta = error - newCost
+
+      println(s"Iteration: $iteration")
+      println("Previous error: " + error)
+      println("New error: " + newCost)
+
+      if (newDelta < sigma) {
+        return newTheta
+      } else {
+        error = newCost
+        iteration += 1
+      }
+    }
+
+    newTheta
+  }
+
+  //Initialize the theta
+  val theta = Array.fill(scaledFeatureDataset.first()._1.length)(0f)
+
+  //Perform the gradient descent
+  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.01f, 0.1f, 10)
+
+  //Print the new theta
+  println("New theta: " + arrayFeatureToString(newTheta))
 
   System.in.read() // Keep the application active.
 
