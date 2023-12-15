@@ -19,12 +19,9 @@ object MLR extends App {
   import spark.implicits._
 
  // Load the possible tweets
-  val possibleTweets: Dataset[Option[Tweet]] = sc.textFile("data/twitter/tweetsraw")
+  val nonUniqueTweets: Dataset[Tweet] = sc.textFile("data/twitter/tweetsraw")
     //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
-    .map(Tweet.parse).toDS
-
-  //Filter all the nones
-  val nonUniqueTweets: Dataset[Tweet] = possibleTweets.filter(_.isDefined).map(_.get)
+    .flatMap(Tweet.parse).toDS
 
   //Filter all the unique tweets (keep the tweet with the most likes)
   val tweets: Dataset[Tweet] = nonUniqueTweets
