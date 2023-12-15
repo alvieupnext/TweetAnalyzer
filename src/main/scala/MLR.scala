@@ -18,10 +18,10 @@ object MLR extends App {
   // Import the implicits, this is now done from the SparkSession (not from SparkContext)
   import spark.implicits._
 
-  // Load the possible tweets
+ // Load the possible tweets
   val possibleTweets: Dataset[Option[Tweet]] = sc.textFile("data/twitter/tweetsraw")
-      //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
-      .map(Tweet.parse).toDS
+    //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
+    .map(Tweet.parse).toDS
 
   //Filter all the nones
   val nonUniqueTweets: Dataset[Tweet] = possibleTweets.filter(_.isDefined).map(_.get)
@@ -30,58 +30,111 @@ object MLR extends App {
   val tweets: Dataset[Tweet] = nonUniqueTweets
     .groupByKey(_.id).reduceGroups((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).persist()
 
+  //A random seed to make sure the random split is the same every time
+  val randomSeed = 42
+
+  //Split the tweets into a training set and a test set
+  val Array(trainingTweets, testTweets) = tweets.randomSplit(Array(0.8, 0.2), randomSeed)
+
+  def extractHashtagMetrics(tweets: Dataset[Tweet], amountOfHashtagGroups: Int = 10): Dataset[(Tweet, Array[Feature])] = {
+
+    // Collect all the hashtags (keep them grouped by tweet)
+    val hashtags = tweets.flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag))).persist()
+
+    // Count the hashtags by the amount of times they occur (make all hashtags lowercase)
+    val hashtagGroups = hashtags.groupByKey(_._2.toLowerCase)
+
+    val hashtagCounts = hashtagGroups.count()
+
+    // Get the total amount of times any hashtag has appeared
+    val totalHashtagCount = hashtags.count().toFloat
+
+    // Divide the amount of times a hashtag has appeared by the total amount of hashtags to get a distribution
+    val hashtagDistribution = hashtagCounts.map(h => (h._1, h._2 / totalHashtagCount))
+
+    // Get the highest distribution
+    val highestDistribution = hashtagDistribution.map(_._2).reduce((a, b) => if (a > b) a else b)
+
+    // Normalize the distribution
+    val normalizedHashtagDistribution = hashtagDistribution.map(h => (h._1, (h._2 / highestDistribution * amountOfHashtagGroups).toInt))
+
+    // Join the hashtags with the normalized distribution
+    val hashtagGroupsJoined = hashtags.joinWith(normalizedHashtagDistribution, hashtags("_2") === normalizedHashtagDistribution("_1")).persist()
+
+    // Remove the hashtag from both sides of the join
+    val hashtagDistributionJoined = hashtagGroupsJoined.map(h => (h._1._1, h._2._2))
+
+    // Group the hashtag scores by tweet
+    val hashtagDistributionGrouped = hashtagDistributionJoined.groupByKey(_._1)
+
+    // Group the hashtag scores by tweet and collect the scores
+    val tweetScoresGrouped = hashtagDistributionGrouped.mapGroups { (tweet, scoresIterator) =>
+      (tweet, scoresIterator.map(_._2).toArray)
+    }
+
+    // Transform the tweet scores to features
+    tweetScoresGrouped.map { case (tweet, scores) =>
+      val possibleDistributions = (0 to amountOfHashtagGroups).toArray
+      val hashtagFeatures = possibleDistributions.map(d => scores.count(_ == d).toFloat)
+      (tweet, hashtagFeatures)
+    }
+  }
+
+
   //first, collect all the hashtags (keep them grouped by tweet)
-  val hashtags: Dataset[(Tweet, Metrics.Tag)] = tweets.flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag))).persist()
+//  val hashtags: Dataset[(Tweet, Metrics.Tag)] = trainingTweets.flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag))).persist()
+//
+//  //then we count the hashtags by the amount of times they occur (make all hashtags lowercase)
+//  val hashtagGroups: KeyValueGroupedDataset[String, (Tweet, Tag)] = hashtags.groupByKey(_._2.toLowerCase)
+//
+//  val hashtagCounts = hashtagGroups.count()
+//
+//  //We get the total amount of times any hashtag has appeared
+//  //Make it a Float to make sure the division is a float division
+//  val totalHashtagCount = hashtags.count().toFloat
+//
+//  //Then we divide the amount of times a hashtag has appeared by the total amount of hashtags to get a distribution
+//  val hashtagDistribution = hashtagCounts.map(h => (h._1, h._2 / totalHashtagCount))
+//
+//  //Get the highest distribution
+//  val highestDistribution = hashtagDistribution.map(_._2).reduce((a, b) => if (a > b) a else b)
+//
+//  val amountOfHashtagGroups = 10
+//
+//  //Normalize the distribution (10 should correspond to the highest distribution)
+//  //The double should become a natural number between 0 and amountOfHashtagGroups
+//  val normalizedHashtagDistribution: Dataset[(Tag, Int)] = hashtagDistribution.map(h => (h._1, (h._2 / highestDistribution * amountOfHashtagGroups).toInt))
+//
+//  //Join the hashtags with the normalized distribution
+//  val hashtagGroupsJoined: Dataset[((Tweet, Tag), (Tag, Int))] = hashtags.joinWith(normalizedHashtagDistribution, hashtags("_2") === normalizedHashtagDistribution("_1")).persist()
+//
+//  //Remove the hashtag from both sides of the join
+//  val hashtagDistributionJoined: Dataset[(Tweet, Int)] = hashtagGroupsJoined.map(h => (h._1._1, h._2._2))
+//
+//  //Group the hashtag scores by tweet
+//  val hashtagDistributionGrouped: KeyValueGroupedDataset[Tweet, (Tweet, Int)] = hashtagDistributionJoined.groupByKey(_._1)
+//
+//  //Group the hashtag scores by tweet and collect the scores
+//  val tweetScoresGrouped: Dataset[(Tweet, Array[Int])] = hashtagDistributionGrouped.mapGroups { (tweet, scoresIterator) =>
+//    (tweet, scoresIterator.map(_._2).toArray)
+//  }
+//
+//  //Procedure for transforming the hashtag scores to features
+//  def hashtagScoresToFeatures(scores: Array[Int]): Array[Feature] = {
+//    //Generate an array from 0 to 10 (possible distribution values)
+//    val possibleDistributions = (0 to amountOfHashtagGroups).toArray
+//    //For each possible distribution, count the amount of times it occurs in the tweet
+//    val hashtagFeatures: Array[Float] = possibleDistributions.map(d => scores.count(_ == d))
+//    hashtagFeatures
+//  }
+//
+//
+//  //Transform the tweet scores to features
+//  val tweetFeatures: Dataset[(Tweet, Array[Feature])] = tweetScoresGrouped.map { case (tweet, scores) =>
+//    (tweet, hashtagScoresToFeatures(scores))
+//  }
 
-  //then we count the hashtags by the amount of times they occur (make all hashtags lowercase)
-  val hashtagGroups: KeyValueGroupedDataset[String, (Tweet, Tag)] = hashtags.groupByKey(_._2.toLowerCase)
-
-  val hashtagCounts = hashtagGroups.count()
-
-  //We get the total amount of times any hashtag has appeared
-  //Make it a Float to make sure the division is a float division
-  val totalHashtagCount = hashtags.count().toFloat
-
-  //Then we divide the amount of times a hashtag has appeared by the total amount of hashtags to get a distribution
-  val hashtagDistribution = hashtagCounts.map(h => (h._1, h._2 / totalHashtagCount))
-
-  //Get the highest distribution
-  val highestDistribution = hashtagDistribution.map(_._2).reduce((a, b) => if (a > b) a else b)
-
-  val amountOfHashtagGroups = 10
-
-  //Normalize the distribution (10 should correspond to the highest distribution)
-  //The double should become a natural number between 0 and amountOfHashtagGroups
-  val normalizedHashtagDistribution: Dataset[(Tag, Int)] = hashtagDistribution.map(h => (h._1, (h._2 / highestDistribution * amountOfHashtagGroups).toInt))
-
-  //Join the hashtags with the normalized distribution
-  val hashtagGroupsJoined: Dataset[((Tweet, Tag), (Tag, Int))] = hashtags.joinWith(normalizedHashtagDistribution, hashtags("_2") === normalizedHashtagDistribution("_1")).persist()
-
-  //Remove the hashtag from both sides of the join
-  val hashtagDistributionJoined: Dataset[(Tweet, Int)] = hashtagGroupsJoined.map(h => (h._1._1, h._2._2))
-
-  //Group the hashtag scores by tweet
-  val hashtagDistributionGrouped: KeyValueGroupedDataset[Tweet, (Tweet, Int)] = hashtagDistributionJoined.groupByKey(_._1)
-
-  //Group the hashtag scores by tweet and collect the scores
-  val tweetScoresGrouped: Dataset[(Tweet, Array[Int])] = hashtagDistributionGrouped.mapGroups { (tweet, scoresIterator) =>
-    (tweet, scoresIterator.map(_._2).toArray)
-  }
-
-  //Procedure for transforming the hashtag scores to features
-  def hashtagScoresToFeatures(scores: Array[Int]): Array[Feature] = {
-    //Generate an array from 0 to 10 (possible distribution values)
-    val possibleDistributions = (0 to amountOfHashtagGroups).toArray
-    //For each possible distribution, count the amount of times it occurs in the tweet
-    val hashtagFeatures: Array[Float] = possibleDistributions.map(d => scores.count(_ == d))
-    hashtagFeatures
-  }
-
-
-  //Transform the tweet scores to features
-  val tweetFeatures: Dataset[(Tweet, Array[Feature])] = tweetScoresGrouped.map { case (tweet, scores) =>
-    (tweet, hashtagScoresToFeatures(scores))
-  }
+  val tweetFeatures: Dataset[(Tweet, Array[Feature])] = extractHashtagMetrics(trainingTweets).persist()
 
   //Only get the id from the tweet and then print tweetfeatures
   println("Tweet features: " + tweetFeatures.map(t => (t._1.id, arrayFeatureToString(t._2))).collect().mkString(", "))
@@ -199,6 +252,16 @@ object MLR extends App {
 
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))
+
+  //Use the testTweets to test the model
+  val testFeatures = extractFeatures(extractHashtagMetrics(testTweets))
+
+  //Calculate the cost of the test features
+  val testCost = cost(testFeatures, newTheta)
+
+  //Print the cost
+  println("Test cost: " + testCost)
+
 
   System.in.read() // Keep the application active.
 
