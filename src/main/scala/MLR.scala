@@ -36,10 +36,10 @@ object MLR extends App {
   def extractHashtagMetrics(tweets: Dataset[Tweet], amountOfHashtagGroups: Int = 10): Dataset[(Tweet, Array[Feature])] = {
 
     // Collect all the hashtags (keep them grouped by tweet)
-    val hashtags = tweets.flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag))).persist()
+    val hashtags = tweets.flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase))).persist()
 
     // Count the hashtags by the amount of times they occur (make all hashtags lowercase)
-    val hashtagGroups = hashtags.groupByKey(_._2.toLowerCase)
+    val hashtagGroups = hashtags.groupByKey(_._2)
 
     val hashtagCounts = hashtagGroups.count()
 
@@ -56,15 +56,15 @@ object MLR extends App {
     val normalizedHashtagDistribution = hashtagDistribution.map(h => (h._1, (h._2 / highestDistribution * amountOfHashtagGroups).toInt))
 
     // Join the hashtags with the normalized distribution
-    val hashtagGroupsJoined = hashtags.joinWith(normalizedHashtagDistribution, hashtags("_2") === normalizedHashtagDistribution("_1")).persist()
+    val hashtagGroupsJoined: Dataset[((Tweet, Tag), (Tag, Int))] = hashtags.joinWith(normalizedHashtagDistribution, hashtags("_2") === normalizedHashtagDistribution("_1")).persist()
 
     // Remove the hashtag from both sides of the join
     val hashtagDistributionJoined = hashtagGroupsJoined.map(h => (h._1._1, h._2._2))
 
     // Group the hashtag scores by tweet
-    val hashtagDistributionGrouped = hashtagDistributionJoined.groupByKey(_._1)
+    val hashtagDistributionGrouped: KeyValueGroupedDataset[Tweet, (Tweet, Int)] = hashtagDistributionJoined.groupByKey(_._1)
 
-    // Group the hashtag scores by tweet and collect the scores
+    // and collect the scores
     val tweetScoresGrouped = hashtagDistributionGrouped.mapGroups { (tweet, scoresIterator) =>
       (tweet, scoresIterator.map(_._2).toArray)
     }
@@ -77,14 +77,26 @@ object MLR extends App {
     }
   }
 
-  val tweetFeatures: Dataset[(Tweet, Array[Feature])] = extractHashtagMetrics(trainingTweets).persist()
+  val amountOfHashTagGroups = 4
 
-  //Only get the id from the tweet and then print tweetfeatures
-  println("Tweet features: " + tweetFeatures.map(t => (t._1.id, arrayFeatureToString(t._2))).collect().mkString(", "))
+  val tweetsWithHashtags: Dataset[(Tweet, Array[Feature])] = extractHashtagMetrics(trainingTweets, amountOfHashTagGroups).persist()
 
-  def extractFeatures(tweets: Dataset[(Tweet, Array[Float])]): Dataset[FeatureTuple] = {
+  //Print the amount of tweet features
+  println("Amount of tweets with hashtags: " + tweetsWithHashtags.count())
+
+  def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Array[Float])]): Dataset[FeatureTuple] = {
+    // Define the default array
+    val defaultArray = Array.fill(amountOfHashTagGroups)(0f)
+
+    //Perform a left outer join on the tweets and the tweets with hashtags
+    val tweetsWithHashTagsFeatures = tweets.joinWith(tweetsWithHashTags, tweets("id") === tweetsWithHashTags("_1.id"), "left_outer")
+      //Fill the missing values with the default array
+      .map {
+        case (tweet, (hashtagTweet, hashtags)) if hashtagTweet != null => (tweet, hashtags)
+        case (tweet, _) => (tweet, defaultArray)
+      }
     //Extract the features from the tweets
-    tweets.map{ case (tweet: Tweet, hashtagFeatures) =>
+    tweetsWithHashTagsFeatures.map{ case (tweet: Tweet, hashtagFeatures) =>
       //Get the features from the tweet
       val tweetLength = tweet.length.toFloat
       val user = tweet.user
@@ -93,12 +105,15 @@ object MLR extends App {
       (Array(1f, tweetLength) ++ userFeatures ++ hashtagFeatures, tweet.likes)
     }
   }
-
+//
   //Extract the features from the tweets
-  val featureDataset: Dataset[FeatureTuple] = extractFeatures(tweetFeatures).persist()
+  val featureDataset: Dataset[FeatureTuple] = extractFeatures(tweets, tweetsWithHashtags).persist()
 
-  //Get the amount of tweets (via counting the scaled Features)
-  val amountOfFeatures = featureDataset.count().toFloat
+  //Print the amount of features
+  println("Amount of features: " + featureDataset.count())
+
+  //Get the amount of features (via counting the array length of the first feature tuple)
+  val amountOfFeatures = featureDataset.first()._1.length
 
   //A procedure to scale the features by normalizing them
   def scaleFeatures(features: Dataset[FeatureTuple]): Dataset[FeatureTuple] = {
@@ -137,9 +152,6 @@ object MLR extends App {
 
   //Scale the features
   val scaledFeatureDataset = scaleFeatures(featureDataset).persist()
-
-  //Print the features
-  println("Features: " + scaledFeatureDataset.collect().map(tuple => (arrayFeatureToString(tuple._1), tuple._2)).mkString(", "))
 
   //Implement the gradient descent algorithm
   //First by implementing the cost function
@@ -196,8 +208,10 @@ object MLR extends App {
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))
 
+  val testTweetsWithHashtags: Dataset[(Tweet, Array[Feature])] = extractHashtagMetrics(testTweets, amountOfHashTagGroups).persist()
+
   //Use the testTweets to test the model
-  val testFeatures = extractFeatures(extractHashtagMetrics(testTweets))
+  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags).persist()
 
   //Calculate the cost of the test features
   val testCost = cost(testFeatures, newTheta)
