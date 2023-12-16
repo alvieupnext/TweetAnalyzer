@@ -109,8 +109,11 @@ object MLR extends App {
   //Extract the features from the tweets
   val featureDataset: Dataset[FeatureTuple] = extractFeatures(tweets, tweetsWithHashtags).persist()
 
+  //Get the amount of DataPoints (tweets)
+  val amountOfDataPoints = featureDataset.count()
+
   //Print the amount of features
-  println("Amount of features: " + featureDataset.count())
+  println("Amount of features: " + amountOfDataPoints)
 
   //Get the amount of features (via counting the array length of the first feature tuple)
   val amountOfFeatures = featureDataset.first()._1.length
@@ -123,7 +126,7 @@ object MLR extends App {
     // Calculate the mean and standard deviation for each feature
     val mean: Array[Float] = featureArray
       .reduce((a, b) => a.zip(b).map { case (x, y) => x + y })
-      .map(_ / amountOfFeatures)
+      .map(_ / amountOfDataPoints)
 
     //Print the mean
     println("Mean: " + arrayFeatureToString(mean))
@@ -132,7 +135,7 @@ object MLR extends App {
     val stddev: Array[Float] = featureArray
       .map(f => f.zip(mean).map { case (x, y) => Math.pow(x - y, 2) })
       .reduce((a, b) => a.zip(b).map { case (x, y) => x + y })
-      .map(_ / amountOfFeatures)
+      .map(_ / amountOfDataPoints)
       .map(math.sqrt)
       .map(_.toFloat)
 
@@ -164,7 +167,7 @@ object MLR extends App {
       Math.pow(h - label, 2)
     }.reduce(_ + _)
     //Return the cost
-    cost.toFloat / (2 * amountOfFeatures)
+    cost.toFloat / (2 * amountOfDataPoints)
   }
 
   def gradientDescent(features: Dataset[FeatureTuple], theta: Theta, alpha: Float, sigma: Float, maxIterations: Int): Theta = {
@@ -178,7 +181,7 @@ object MLR extends App {
           val h = f.zip(newTheta).map { case (x, y) => x * y }.sum
           (h - label) * f(j)
         }.reduce(_ + _)
-        currentTheta - alpha * h / amountOfFeatures
+        currentTheta - alpha * h / amountOfDataPoints
       }
 
       val newCost = cost(features, newTheta)
@@ -200,24 +203,24 @@ object MLR extends App {
   }
 
   //Initialize the theta
-  val theta = Array.fill(scaledFeatureDataset.first()._1.length)(0f)
+  val theta = Array.fill(amountOfFeatures)(0f)
 
   //Perform the gradient descent
-  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.01f, 0.1f, 10)
+  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 0.1f, 20)
 
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))
 
-  val testTweetsWithHashtags: Dataset[(Tweet, Array[Feature])] = extractHashtagMetrics(testTweets, amountOfHashTagGroups).persist()
-
-  //Use the testTweets to test the model
-  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags).persist()
-
-  //Calculate the cost of the test features
-  val testCost = cost(testFeatures, newTheta)
-
-  //Print the cost
-  println("Test cost: " + testCost)
+//  val testTweetsWithHashtags: Dataset[(Tweet, Array[Feature])] = extractHashtagMetrics(testTweets, amountOfHashTagGroups).persist()
+//
+//  //Use the testTweets to test the model
+//  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags).persist()
+//
+//  //Calculate the cost of the test features
+//  val testCost = cost(testFeatures, newTheta)
+//
+//  //Print the cost
+//  println("Test cost: " + testCost)
 
 
   System.in.read() // Keep the application active.
