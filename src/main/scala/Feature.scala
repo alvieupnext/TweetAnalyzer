@@ -13,6 +13,6 @@ object Feature {
   //Create an Array[Feature] type which prints as a string
   def arrayFeatureToString(features: Array[Feature]): String = features.mkString("[", ",", "]")
   def arrayDoubleToString(features: Array[Double]): String = features.mkString("[", ",", "]")
-  type FeatureTuple = (Array[Feature], Likes)
+  type FeatureTuple = (Array[Feature], Float)
 
 }
