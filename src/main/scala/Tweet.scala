@@ -1,6 +1,6 @@
 //get Tag and Likes from Metrics
 import Metrics.{Tag, Likes, ID}
-import upickle.default._
+//Import ujson to parse the tweets
 
 
 case class Tweet(id: ID, text: String,
@@ -44,18 +44,19 @@ object Tweet {
     //try catch
     try {
       // The string is in a json format, so we can use the json library to parse it
-      val jsonValue = ujson.read(tweet, true)
+      val jsonValue = ujson.read(tweet)
       // Check whether the tweet is a retweet or a quoted tweet
       (jsonValue.obj.get("retweeted_status"), jsonValue.obj.get("quoted_status")) match {
-        case (Some(retweet), _) if retweet.obj.nonEmpty => Some(parseTweet(retweet))
-        case (_, Some(quote)) if quote.obj.nonEmpty => Some(parseTweet(quote))
+        case (Some(retweet), _) => Some(parseTweet(retweet))
+        case (_, Some(quote)) => Some(parseTweet(quote))
         // If it is not a retweet or a quoted tweet, return None
         case _ => None
       }
     } catch {
       // If the parsing fails, return None, but print the tweet
       case e: Exception =>
-        println(s"Failed to parse tweet: $tweet")
+//        println(s"Failed to parse tweet: $tweet")
+//        println(e)
         None
     }
   }
