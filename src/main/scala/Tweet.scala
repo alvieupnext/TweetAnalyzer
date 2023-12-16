@@ -41,14 +41,22 @@ object Tweet {
 
   // The parse method signature remains the same
   def parse(tweet: String): Option[Tweet] = {
-    // The string is in a json format, so we can use the json library to parse it
-    val jsonValue = ujson.read(tweet)
-    // Check whether the tweet is a retweet or a quoted tweet
-    (jsonValue.obj.get("retweeted_status"), jsonValue.obj.get("quoted_status")) match {
-      case (Some(retweet), _) if retweet.obj.nonEmpty => Some(parseTweet(retweet))
-      case (_, Some(quote)) if quote.obj.nonEmpty => Some(parseTweet(quote))
-      // If it is not a retweet or a quoted tweet, return None
-      case _ => None
+    //try catch
+    try {
+      // The string is in a json format, so we can use the json library to parse it
+      val jsonValue = ujson.read(tweet, true)
+      // Check whether the tweet is a retweet or a quoted tweet
+      (jsonValue.obj.get("retweeted_status"), jsonValue.obj.get("quoted_status")) match {
+        case (Some(retweet), _) if retweet.obj.nonEmpty => Some(parseTweet(retweet))
+        case (_, Some(quote)) if quote.obj.nonEmpty => Some(parseTweet(quote))
+        // If it is not a retweet or a quoted tweet, return None
+        case _ => None
+      }
+    } catch {
+      // If the parsing fails, return None, but print the tweet
+      case e: Exception =>
+        println(s"Failed to parse tweet: $tweet")
+        None
     }
   }
 }
