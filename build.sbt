@@ -11,5 +11,5 @@ libraryDependencies += "org.apache.spark" %% "spark-core" % "3.3.2"
 
 libraryDependencies += "org.apache.spark" %% "spark-sql" % "3.3.2"
 
-libraryDependencies += "com.lihaoyi" %% "upickle" % "3.0.0"
+libraryDependencies += "com.lihaoyi" %% "ujson" % "3.1.3"
 
