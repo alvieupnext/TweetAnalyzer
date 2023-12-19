@@ -11,7 +11,7 @@ object MLR extends App {
   val conf = new SparkConf()
   conf.setAppName("Datasets Test")
   // Uncomment when running locally
-  conf.setMaster("local[4]")
+//  conf.setMaster("local[4]")
   val sc = new SparkContext(conf)
 
   // Create a SparkSession which is required for working with Dataset
