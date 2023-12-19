@@ -21,7 +21,7 @@ object MLR extends App {
   import spark.implicits._
 
  // Load the possible tweets
-  val nonUniqueTweets: Dataset[Tweet] = sc.textFile("data/twitter/tweetsraw")
+  val nonUniqueTweets: Dataset[Tweet] = sc.textFile("/data/twitter/tweetsraw")
     //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
     .flatMap(Tweet.parse).toDS
 
