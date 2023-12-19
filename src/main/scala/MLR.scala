@@ -17,17 +17,25 @@ object MLR extends App {
   // Create a SparkSession which is required for working with Dataset
   val spark = SparkSession.builder().config(conf).getOrCreate()
 
+  spark.sparkContext.setLogLevel("FATAL")
+
   // Import the implicits, this is now done from the SparkSession (not from SparkContext)
   import spark.implicits._
 
  // Load the possible tweets
-  val nonUniqueTweets: Dataset[Tweet] = sc.textFile("/data/twitter/tweetsraw")
+  val nonUniqueTweets: Dataset[Tweet] = sc.textFile("/data/twitter/reducedTweetsRaw/tweets-big")
     //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
     .flatMap(Tweet.parse).toDS
 
   //Filter all the unique tweets (keep the tweet with the most likes)
   val tweets: Dataset[Tweet] = nonUniqueTweets
     .groupByKey(_.id).reduceGroups((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).persist()
+
+  //Print the amount of tweets
+  println("Amount of tweets: " + tweets.count())
+
+  //Print the first ten tweets
+  tweets.take(10).foreach(println)
 
   //A random seed to make sure the random split is the same every time
   val randomSeed = 42
@@ -65,6 +73,12 @@ object MLR extends App {
 
   val trainingTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(trainingTweets, amountOfHashTagGroups).persist()
 
+  //Print the amount of tweets with hashtags
+  println("Amount of tweets with hashtags: " + trainingTweetsWithHashtags.count())
+
+  //Print the first ten tweets with their hashtag scores
+  trainingTweetsWithHashtags.take(10).foreach(println)
+
   def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Feature)]): Dataset[FeatureTuple] = {
 
     //Perform a left outer join on the tweets and the tweets with hashtags
@@ -88,6 +102,15 @@ object MLR extends App {
   //Extract the features from the tweets
   val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags).persist()
 
+  //Print the amount of feature tuples
+  println("Amount of feature tuples: " + featureDataset.count())
+  //Print the amount of features
+  println("Amount of features: " + featureDataset.first()._1.length)
+
+  println("Printing regular features:")
+  //Print the first ten features
+  featureDataset.take(10).map{case (tuple: Array[Feature], dependent: Likes) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
+
   //Get the amount of DataPoints (tweets)
   val amountOfDataPoints = featureDataset.count()
 
@@ -95,8 +118,12 @@ object MLR extends App {
   val amountOfFeatures = featureDataset.first()._1.length
 
   //Get the mean and standard deviation for the likes
-  val likesMean = featureDataset.map(_._2).reduce(_ + _) / amountOfDataPoints
-  val likesStddev = featureDataset.map(_._2).map(l => Math.pow(l - likesMean, 2)).reduce(_ + _) / amountOfDataPoints
+  val likesMean: Double = featureDataset.map(_._2).reduce(_ + _) / amountOfDataPoints
+  val likesStddev: Double = math.sqrt(featureDataset.map(_._2).map(l => (l - likesMean) * (l - likesMean)).reduce(_ + _) / amountOfDataPoints)
+
+  //Print both
+  println("Likes mean: " + likesMean)
+  println("Likes stddev: " + likesStddev)
 
 
   //A procedure to scale the features by normalizing them
@@ -128,15 +155,17 @@ object MLR extends App {
       val normFeatures = f.zip(mean).zip(stddev).map {
         case ((feature, mean), stdDev) => if (stdDev != 0) (feature - mean) / stdDev else 0f
       }
-      val normLikes = (label - likesMean) / likesStddev
-      (normFeatures, normLikes.toFloat)
+      //print norm likes as
+      (normFeatures, label)
     }
-
     normalizedFeatures
   }
 
   //Scale the features
   val scaledFeatureDataset = scaleFeatures(featureDataset).persist()
+
+  //Print the first ten scaled features
+  scaledFeatureDataset.take(10).map{case (tuple: Array[Feature], dependent: Likes) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
   //Implement the gradient descent algorithm
   //First by implementing the cost function
@@ -162,7 +191,7 @@ object MLR extends App {
         val h = features.map { case (f, label) =>
           val h = f.zip(newTheta).map { case (x, y) => x * y }.sum
           (h - label) * f(j)
-        }.reduce(_ + _)
+        }.reduce(_ + _).toFloat
         currentTheta - alpha * h / amountOfDataPoints
       }
 
@@ -188,7 +217,7 @@ object MLR extends App {
   val theta = Array.fill(amountOfFeatures)(0f)
 
   //Perform the gradient descent (1 to the power of -12 is the sigma)
-  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.01f, 1e-14f, 10)
+  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-14f, Int.MaxValue)
 
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))

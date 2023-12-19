@@ -5,8 +5,8 @@ import Metrics.{Tag, Likes, ID}
 
 case class Tweet(id: ID, text: String,
                  user: User,
-                 hashTags: Array[Tag],
-                 likes: Likes) {
+                 hashTags: Array[Tag] = Array(),
+                 likes: Likes = 0) {
 
   //Get the number of hashtags
   def numberOfHashTags: Int = hashTags.length
@@ -16,7 +16,7 @@ case class Tweet(id: ID, text: String,
 
   //Overwrite the toString method to display all hashtags via mkString
   override def toString: String = {
-    s"Tweet($id, $text, $user, ${hashTags.mkString("[", ",", "]")}, $likes)"
+    s"Tweet($id, $length, ${user.screenName}, ${hashTags.mkString("[", ",", "]")}, $likes)"
   }
 
   //Change equality to only check the id
