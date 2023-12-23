@@ -4,6 +4,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Dataset, KeyValueGroupedDataset, SparkSession}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.Partitioner
 
 import scala.annotation.tailrec
 
@@ -23,6 +24,19 @@ object MLR extends App {
   // Import the implicits, this is now done from the SparkSession (not from SparkContext)
   import spark.implicits._
 
+  val desiredPartitions = 100
+
+  // Define a custom partitioner which groups tweets by their id
+  class IDPartitioner(partitions: Int = desiredPartitions) extends Partitioner {
+    override def numPartitions: Int = partitions
+
+    override def getPartition(key: Any): Int = {
+      // Assuming key is the tweet.id
+      val id = key.toString
+      Tweet.getPartitionNumber(id)
+    }
+  }
+
  // Load the possible tweets
   val nonUniqueTweets: RDD[Tweet] = sc.textFile("data/twitter/tweetsraw")
     //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
@@ -34,8 +48,11 @@ object MLR extends App {
   //Get the id per tweet
   val nonUniqueTweetsWithId: RDD[(ID, Tweet)] = nonUniqueTweets.map(tweet => (tweet.id, tweet))
 
+  //Repartition the tweets by their id
+  val repartitionedTweetsWithId: RDD[(ID, Tweet)] = nonUniqueTweetsWithId.partitionBy(new IDPartitioner(desiredPartitions))
+
   //Filter all the unique tweets (keep the tweet with the most likes) and turn into a Dataset
-  val tweets: Dataset[Tweet] = nonUniqueTweetsWithId
+  val tweets: Dataset[Tweet] = repartitionedTweetsWithId
     .reduceByKey((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).toDS().persist()
 
   //Print the amount of tweets
@@ -52,13 +69,16 @@ object MLR extends App {
   def extractHashtagMetrics(tweets: Dataset[Tweet]): Dataset[(Tweet, Feature)] = {
 
     // Collect all the hashtags (keep them grouped by tweet)
-    val hashtags = tweets.flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase)))
+    val hashtags = tweets
+      .flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase)))
+      .toDF("tweet", "hashtag") // Convert the Dataset of tuples to a DataFrame with column names
+      .repartition(desiredPartitions, col("hashtag"))
 
     print("Amount of hashtags: " + hashtags.count())
 
     // Define a DataFrame with hashtags and their counts
     val hashtagCounts = hashtags
-      .groupBy($"_2".as("hashtag")) // Group by hashtag and rename the column
+      .groupBy($"hashtag".as("hashtag2"))// Group by hashtag and rename the column
       .count()
       .withColumnRenamed("count", "hashtagCount")
     // Decrease the hashtag count by 1, since we don't want to count the hashtag in the tweet itself
@@ -67,13 +87,25 @@ object MLR extends App {
     // Join the original hashtags dataset with the counts
     // Here, we use a broadcast join if hashtagCounts is small to optimize the join
     val hashtagGroupsJoined = hashtags
-      .withColumnRenamed("_1", "tweet")
+//      .withColumnRenamed("_1", "tweet")
 //      .withColumnRenamed("_2", "hashtag")
-      .join(hashtagCounts, $"_2" === hashtagCounts("hashtag"))
+      .join(hashtagCounts, $"hashtag" === hashtagCounts("hashtag2"))
+
+    // Define custom partitioning logic as a UDF
+    val getPartitionNumberUDF = udf((id: String) => {
+      Tweet.getPartitionNumber(id)
+    })
 
     // Remove the hashtag from both sides of the join
     val hashtagCountJoined = hashtagGroupsJoined
       .select($"tweet", $"hashtagCount")
+      //Add a new column which contains the partition number
+      .withColumn("partitionNumber", getPartitionNumberUDF($"tweet.id"))
+      // Repartition the dataset by tweet id
+      .repartition(desiredPartitions, col("partitionNumber"))
+
+    //This step should ensure that the tweets with hashtags are the same partition as the ones
+    //without hashtags which should make inner joining them easier
 
     // Group the hashtag scores by tweet
     val tweetScoresGrouped = hashtagCountJoined
@@ -240,7 +272,6 @@ object MLR extends App {
 
   //Scale the test features
   val scaledTestFeatures = scaleFeatures(testFeatures, amountOfTestFeatures).persist()
-
 
   //Calculate the cost of the test features
   val testCost = cost(scaledTestFeatures, newTheta, amountOfTestFeatures)
