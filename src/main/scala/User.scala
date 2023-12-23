@@ -3,7 +3,12 @@ import Feature.Feature
 case class User(screenName: String, followersCount: Int, friendsCount: Int,
                 listedCount: Int, favoritesCount: Int, statusesCount: Int, verified : Boolean) {
   //Return the features of the User
-  def features: Array[Feature] = Array(followersCount, friendsCount, listedCount, favoritesCount, statusesCount, if (verified) 1f else 0f)
+  def features: Array[Feature] = Array(
+    followersCount,
+    friendsCount, listedCount, statusesCount,
+    favoritesCount,
+//    if (verified) 1f else 0f
+  )
 }
 
 
