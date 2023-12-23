@@ -82,7 +82,7 @@ object MLR extends App {
       .count()
       .withColumnRenamed("count", "hashtagCount")
     // Decrease the hashtag count by 1, since we don't want to count the hashtag in the tweet itself
-      .withColumn("hashtagCount", $"hashtagCount" - 1)
+//      .withColumn("hashtagCount", $"hashtagCount" - 1)
 
     // Join the original hashtags dataset with the counts
     // Here, we use a broadcast join if hashtagCounts is small to optimize the join
