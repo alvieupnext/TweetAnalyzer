@@ -29,32 +29,23 @@ object MLR extends App {
     .flatMap(Tweet.parse)
 
   //Print the first ten non unique tweets
-  nonUniqueTweets.take(10).foreach(println)
+//  nonUniqueTweets.take(10).foreach(println)
 
   //Get the id per tweet
   val nonUniqueTweetsWithId: RDD[(ID, Tweet)] = nonUniqueTweets.map(tweet => (tweet.id, tweet))
 
   //Filter all the unique tweets (keep the tweet with the most likes) and turn into a Dataset
   val tweets: Dataset[Tweet] = nonUniqueTweetsWithId
-    .reduceByKey((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).toDS()
+    .reduceByKey((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).toDS().persist()
 
   //Print the amount of tweets
   println("Amount of tweets: " + tweets.count())
-
-  //Print the first ten tweets
-  tweets.take(10).foreach(println)
 
   //A random seed to make sure the random split is the same every time
   val randomSeed = 42
 
   //Split the tweets into a training set and a test set
   val Array(trainingTweets, testTweets) = tweets.randomSplit(Array(0.8, 0.2), randomSeed)
-
-  //Persist the training tweets
-  trainingTweets.persist()
-
-  //Persist the test tweets, on the disk since we only need these tweets at the end
-  testTweets.persist(StorageLevel.DISK_ONLY)
 
   import org.apache.spark.sql.functions._
 
@@ -70,6 +61,8 @@ object MLR extends App {
       .groupBy($"_2".as("hashtag")) // Group by hashtag and rename the column
       .count()
       .withColumnRenamed("count", "hashtagCount")
+    // Decrease the hashtag count by 1, since we don't want to count the hashtag in the tweet itself
+      .withColumn("hashtagCount", $"hashtagCount" - 1)
 
     // Join the original hashtags dataset with the counts
     // Here, we use a broadcast join if hashtagCounts is small to optimize the join
@@ -93,13 +86,10 @@ object MLR extends App {
   }
 
 
-  val trainingTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(trainingTweets).persist()
+  val trainingTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(trainingTweets)
 
   //Print the amount of tweets with hashtags
-  println("Amount of tweets with hashtags: " + trainingTweetsWithHashtags.count())
-
-  //Print the first ten tweets with their hashtag scores
-  trainingTweetsWithHashtags.take(10).foreach(println)
+  println("Amount of training tweets with hashtags: " + trainingTweetsWithHashtags.count())
 
   def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Feature)]): Dataset[FeatureTuple] = {
 
@@ -124,32 +114,14 @@ object MLR extends App {
   }
 //
   //Extract the features from the tweets
-  val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags).persist()
-
-
-  //Print the amount of feature tuples
-  println("Amount of feature tuples: " + featureDataset.count())
-  //Print the amount of features
-  println("Amount of features: " + featureDataset.first()._1.length)
+  val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags)
 
   println("Printing regular features:")
   //Print the first ten features
   featureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
   //Get the amount of DataPoints (tweets)
-  val amountOfDataPoints = featureDataset.count()
-
-  //Get the amount of features (via counting the array length of the first feature tuple)
-  val amountOfFeatures = featureDataset.first()._1.length
-
-  //Get the mean and standard deviation for the likes
-  val likesMean: Double = featureDataset.map(_._2).reduce(_ + _) / amountOfDataPoints
-  val likesStddev: Double = math.sqrt(featureDataset.map(_._2).map(l => (l - likesMean) * (l - likesMean)).reduce(_ + _) / amountOfDataPoints)
-
-  //Print both
-  println("Likes mean: " + likesMean)
-  println("Likes stddev: " + likesStddev)
-
+  val amountOfDataPoints = trainingTweets.count()
 
   //A procedure to scale the features by normalizing them
   def scaleFeatures(features: Dataset[FeatureTuple], m: Long = amountOfDataPoints): Dataset[FeatureTuple] = {
@@ -244,6 +216,9 @@ object MLR extends App {
     newTheta
   }
 
+  //Get the amount of features (via counting the array length of the first feature tuple)
+  val amountOfFeatures = scaledFeatureDataset.first()._1.length
+
   //Initialize the theta
   val theta = Array.fill(amountOfFeatures)(0f)
 
@@ -254,13 +229,13 @@ object MLR extends App {
   println("New theta: " + arrayFeatureToString(newTheta))
 
 
-  val testTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(testTweets).persist()
+  val testTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(testTweets)
 
   //Use the testTweets to test the model
-  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags).persist()
+  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags)
 
   //Count the testFeatures
-  val amountOfTestFeatures = testFeatures.count()
+  val amountOfTestFeatures = testTweets.count()
 
 
   //Scale the test features
