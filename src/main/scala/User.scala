@@ -5,7 +5,7 @@ case class User(screenName: String, followersCount: Int, friendsCount: Int,
   //Return the features of the User
   def features: Array[Feature] = Array(
     followersCount,
-    friendsCount, listedCount, statusesCount,
+//    friendsCount, listedCount, statusesCount,
     favoritesCount,
 //    if (verified) 1f else 0f
   )
