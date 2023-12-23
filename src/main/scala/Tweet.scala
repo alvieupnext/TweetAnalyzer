@@ -60,4 +60,15 @@ object Tweet {
         None
     }
   }
+
+  def getPartitionNumber(id: String): Int = {
+    // Assuming id is always at least 2 characters long and contains only hexadecimal characters
+    // Extract the last 2 characters of the id
+    val lastTwo = id.takeRight(2)
+    // Convert the last three characters to a number using hexadecimal base
+    val number = Integer.parseInt(lastTwo, 10)
+    // Use modulo to map the number to a range from 0 to 99
+    number
+  }
+
 }
