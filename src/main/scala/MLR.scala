@@ -52,8 +52,9 @@ object MLR extends App {
   val repartitionedTweetsWithId: RDD[(ID, Tweet)] = nonUniqueTweetsWithId.partitionBy(new IDPartitioner(desiredPartitions))
 
   //Filter all the unique tweets (keep the tweet with the most likes) and turn into a Dataset
+  //Keep tweets in the Disk only storage level to not burden the memory
   val tweets: Dataset[Tweet] = repartitionedTweetsWithId
-    .reduceByKey((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).toDS().persist()
+    .reduceByKey((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).toDS().persist(StorageLevel.DISK_ONLY)
 
   //Print the amount of tweets
   println("Amount of tweets: " + tweets.count())
@@ -146,14 +147,14 @@ object MLR extends App {
   }
 //
   //Extract the features from the tweets
-  val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags)
+  val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags).persist()
 
   println("Printing regular features:")
   //Print the first ten features
   featureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
-  //Get the amount of DataPoints (tweets)
-  val amountOfDataPoints = trainingTweets.count()
+  //Get the amount of DataPoints (tweets). This should also persist the featureDataset
+  val amountOfDataPoints = featureDataset.count()
 
   //A procedure to scale the features by normalizing them
   def scaleFeatures(features: Dataset[FeatureTuple], m: Long = amountOfDataPoints): Dataset[FeatureTuple] = {
@@ -216,8 +217,8 @@ object MLR extends App {
     cost.toFloat / (2 * m)
   }
 
-  def gradientDescent(features: Dataset[FeatureTuple], theta: Theta, alpha: Float, sigma: Float, maxIterations: Int, m: Long = amountOfDataPoints): Theta = {
-    var error = cost(features, theta)
+  def gradientDescent(features: Dataset[FeatureTuple], theta: Theta, alpha: Float, sigma: Float, maxIterations: Int,initial_error: Float,m: Long = amountOfDataPoints): Theta = {
+    var error = initial_error
     var newTheta = theta
     var iteration = 0
 
@@ -256,24 +257,32 @@ object MLR extends App {
 
   val originalTheta = theta
 
+  //Get the initial cost
+  val initialCost = cost(scaledFeatureDataset, theta)
+
+  //The cost function now has used the scaled features, so we can free up the regular features
+  featureDataset.unpersist()
+
   //Perform the gradient descent (1 to the power of -12 is the sigma)
-  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-9f, Int.MaxValue)
+  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-9f, Int.MaxValue, initialCost)
 
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))
+
+  //Unpersist the scaled feature dataset
+  scaledFeatureDataset.unpersist()
 
 
   val testTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(testTweets)
 
   //Use the testTweets to test the model
-  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags)
+  val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags).persist()
 
   //Count the testFeatures
-  val amountOfTestFeatures = testTweets.count()
-
+  val amountOfTestFeatures = testFeatures.count()
 
   //Scale the test features
-  val scaledTestFeatures = scaleFeatures(testFeatures, amountOfTestFeatures).persist()
+  val scaledTestFeatures = scaleFeatures(testFeatures, amountOfTestFeatures)
 
   //Calculate the cost of the test features
   val testCost = cost(scaledTestFeatures, newTheta, amountOfTestFeatures)
