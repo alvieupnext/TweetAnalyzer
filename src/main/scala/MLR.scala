@@ -200,7 +200,7 @@ object MLR extends App {
   println("Printing scaled features:")
 
   //Print the first ten scaled features
-  scaledFeatureDataset.take(10).map{case (tuple: Array[Feature], dependent: Float) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
+  scaledFeatureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
   //Implement the gradient descent algorithm
   //First by implementing the cost function
@@ -254,6 +254,8 @@ object MLR extends App {
   //Initialize the theta
   val theta = Array.fill(amountOfFeatures)(0f)
 
+  val originalTheta = theta
+
   //Perform the gradient descent (1 to the power of -12 is the sigma)
   val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-9f, Int.MaxValue)
 
@@ -278,6 +280,8 @@ object MLR extends App {
 
   //Print the cost
   println("Test cost: " + testCost)
+
+  print("Original theta test cost " + cost(scaledTestFeatures, originalTheta, amountOfTestFeatures))
 //
 //
   System.in.read() // Keep the application active.
