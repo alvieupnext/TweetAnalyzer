@@ -67,81 +67,107 @@ object MLR extends App {
 
   import org.apache.spark.sql.functions._
 
-  def extractHashtagMetrics(tweets: Dataset[Tweet]): Dataset[(Tweet, Feature)] = {
+  def extractHashtagMetrics(tweets: Dataset[Tweet]): Dataset[(Tweet, Long)] = {
 
     // Collect all the hashtags (keep them grouped by tweet)
-    val hashtags = tweets
+    val hashtags: Dataset[(Tweet, Tag)] = tweets
       .flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase)))
-      .toDF("tweet", "hashtag") // Convert the Dataset of tuples to a DataFrame with column names
-      .repartition(desiredPartitions, col("hashtag"))
+      //      .toDF("tweet", "hashtag") // Convert the Dataset of tuples to a DataFrame with column names
+      .repartition(desiredPartitions, col("_2"))
 
     print("Amount of hashtags: " + hashtags.count())
 
     // Define a DataFrame with hashtags and their counts
-    val hashtagCounts = hashtags
-      .groupBy($"hashtag".as("hashtag2"))// Group by hashtag and rename the column
+    val hashtagCounts: Dataset[(Tag, Long)] = hashtags
+      .groupByKey(p => p._2)// Group by hashtag and rename the column
       .count()
-      .withColumnRenamed("count", "hashtagCount")
+//      .count()
+//      .withColumnRenamed("count", "hashtagCount")
     // Decrease the hashtag count by 1, since we don't want to count the hashtag in the tweet itself
 //      .withColumn("hashtagCount", $"hashtagCount" - 1)
 
     // Join the original hashtags dataset with the counts
     // Here, we use a broadcast join if hashtagCounts is small to optimize the join
-    val hashtagGroupsJoined = hashtags
-//      .withColumnRenamed("_1", "tweet")
-//      .withColumnRenamed("_2", "hashtag")
-      .join(hashtagCounts, $"hashtag" === hashtagCounts("hashtag2"))
+    val hashtagGroupsJoined: Dataset[(Tweet, Long)] = hashtags
+      .joinWith(hashtagCounts, hashtags("_2") === hashtagCounts("key"))
+      .map{case (p1, p2) => (p1._1, p2._2)}
 
-    // Define custom partitioning logic as a UDF
-    val getPartitionNumberUDF = udf((id: String) => {
-      Tweet.getPartitionNumber(id)
-    })
+    // Repartition the tweets with hashtag counts exactly like the regular tweets
+    // Makes the subsequent groupBy tweet not shuffled and
+    // makes the later join with the original tweets Dataset not shuffled
+    val withPartitionNumber = hashtagGroupsJoined.map { case (tweet, count) =>
+      val partitionNumber = Tweet.getPartitionNumber(tweet.id)
+      (tweet, count, partitionNumber)
+    }
 
-    // Remove the hashtag from both sides of the join
-    val hashtagCountJoined = hashtagGroupsJoined
-      .select($"tweet", $"hashtagCount")
-      //Add a new column which contains the partition number
-      .withColumn("partitionNumber", getPartitionNumberUDF($"tweet.id"))
-      // Repartition the dataset by tweet id
-      .repartition(desiredPartitions, col("partitionNumber"))
+    val repartitionedHashtagGroups = withPartitionNumber.repartition(desiredPartitions, $"_3") // 100 partitions
 
-    //This step should ensure that the tweets with hashtags are the same partition as the ones
-    //without hashtags which should make inner joining them easier
 
-    // Group the hashtag scores by tweet
-    val tweetScoresGrouped = hashtagCountJoined
-      .groupBy($"tweet")
-      .agg(sum($"hashtagCount").as("totalHashtagScore"))
+    val tweetScoresGrouped: Dataset[(Tweet, Long)] = repartitionedHashtagGroups
+      // Remove the partition number
+      .map{case (tweet, count, _) => (tweet, count)}
+      // Group by tweet
+      .groupByKey(_._1)
+      // Only retain the count (transform to feature)
+      .mapValues(_._2)
+      // Reduce by summing the values
+      .reduceGroups(_+_)
 
-    // Convert the result back to the required format: Dataset[(Tweet, Feature)]
     tweetScoresGrouped
-      .as[(Tweet, Feature)]
+
+
+
+
+//    // Define custom partitioning logic as a UDF
+//    val getPartitionNumberUDF = udf((id: String) => {
+//      Tweet.getPartitionNumber(id)
+//    })
+
+//    // Remove the hashtag from both sides of the join
+//    val hashtagCountJoined = hashtagGroupsJoined
+//      .select($"tweet", $"hashtagCount")
+//      //Add a new column which contains the partition number
+//      .withColumn("partitionNumber", getPartitionNumberUDF($"tweet.id"))
+//      // Repartition the dataset by tweet id
+//      .repartition(desiredPartitions, col("partitionNumber"))
+//
+//    //This step should ensure that the tweets with hashtags are the same partition as the ones
+//    //without hashtags which should make inner joining them easier
+
+//    // Group the hashtag scores by tweet
+//    val tweetScoresGrouped = hashtagCountJoined
+//      .groupBy($"tweet")
+//      .agg(sum($"hashtagCount").as("totalHashtagScore"))
+//
+//    // Convert the result back to the required format: Dataset[(Tweet, Feature)]
+//    tweetScoresGrouped
+//      .as[(Tweet, Feature)]
   }
 
 
-  val trainingTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(trainingTweets)
+  val trainingTweetsWithHashtags: Dataset[(Tweet, Long)] = extractHashtagMetrics(trainingTweets)
 
   //Print the amount of tweets with hashtags
   println("Amount of training tweets with hashtags: " + trainingTweetsWithHashtags.count())
 
-  def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Feature)]): Dataset[FeatureTuple] = {
+  def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Long)]): Dataset[FeatureTuple] = {
 
     //Perform a left outer join on the tweets and the tweets with hashtags
-    val tweetsWithHashTagsFeatures: Dataset[(Tweet, Feature)] = tweets.joinWith(tweetsWithHashTags, tweets("id") === tweetsWithHashTags("tweet.id"), "left_outer")
+    val tweetsWithHashTagsFeatures: Dataset[(Tweet, Long)] = tweets.joinWith(tweetsWithHashTags, tweets("id") === tweetsWithHashTags("key.id"), "left_outer")
       //If the tweet doesn't have a hashtag, default to 0
       .map {
         case (tweet, (hashtagTweet, hashtagScore)) if hashtagTweet != null => (tweet, hashtagScore)
         case (tweet, _) => (tweet, 0)
       }
     //Extract the features from the tweets
-    tweetsWithHashTagsFeatures.map{ case (tweet: Tweet, hashtagCount: Feature) =>
+    tweetsWithHashTagsFeatures.map{ case (tweet: Tweet, hashtagCount: Long) =>
       //Get the features from the tweet
-      val tweetLength = tweet.length.toFloat
+      val tweetLength = tweet.textLength.toFloat
       val user = tweet.user
       val userFeatures: Array[Float] = user.features
       //Return the features, remember to add x0 = 1
       (Array(1f, tweetLength,
-        hashtagCount
+        hashtagCount.toFloat
       ) ++ userFeatures, tweet.likes)
     }
   }
@@ -273,7 +299,7 @@ object MLR extends App {
   scaledFeatureDataset.unpersist()
 
 
-  val testTweetsWithHashtags: Dataset[(Tweet, Feature)] = extractHashtagMetrics(testTweets)
+  val testTweetsWithHashtags: Dataset[(Tweet, Long)] = extractHashtagMetrics(testTweets)
 
   //Use the testTweets to test the model
   val testFeatures = extractFeatures(testTweets, testTweetsWithHashtags).persist()
