@@ -12,7 +12,7 @@ case class User(screenName: String, followersCount: Int,
     followersCount,
 //    friendsCount,
 //        listedCount,
-//        statusesCount,
+        statusesCount,
     favoritesCount,
 //    if (verified) 1f else 0f
   )

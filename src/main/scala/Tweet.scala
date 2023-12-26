@@ -58,7 +58,7 @@ object Tweet {
     }
   }
 
-  def getPartitionNumber(id: String): Int = {
+  def getPartitionNumber(id: ID): Int = {
     // Assuming id is always at least 2 characters long and contains only hexadecimal characters
     // Extract the last 2 characters of the id
     val lastTwo = id.takeRight(2)
