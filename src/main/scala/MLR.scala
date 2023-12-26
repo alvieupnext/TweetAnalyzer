@@ -11,7 +11,7 @@ import scala.annotation.tailrec
 object MLR extends App {
 
   val conf = new SparkConf()
-  conf.setAppName("Datasets Test")
+  conf.setAppName("Multivariate Linear Regression")
   // Uncomment when running locally
   conf.setMaster("local[4]")
   val sc = new SparkContext(conf)
