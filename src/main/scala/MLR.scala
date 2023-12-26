@@ -5,8 +5,10 @@ import org.apache.spark.sql.{Dataset, KeyValueGroupedDataset, SparkSession}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.Partitioner
+import org.apache.spark.broadcast.Broadcast
 
 import scala.annotation.tailrec
+import scala.util.control.Breaks.break
 
 object MLR extends App {
 
@@ -183,43 +185,49 @@ object MLR extends App {
   val amountOfDataPoints = featureDataset.count()
 
   //A procedure to scale the features by normalizing them
+
   def scaleFeatures(features: Dataset[FeatureTuple], m: Long = amountOfDataPoints): Dataset[FeatureTuple] = {
 
-    // Calculate the mean and standard deviation for each feature and the likes
-    val mean: Array[Feature] = features.map{ case (f: Array[Feature], label: Feature) => f :+ label}
+    // Calculate the mean
+    val mean: Array[Feature] = features.map{ case (f: Array[Feature], label: Feature) => f :+ label }
       .reduce((a, b) => a.zip(b).map { case (x, y) => x + y })
       .map(_ / m)
 
-    //Print the mean
+    // Print the mean
     println("Mean: " + arrayFeatureToString(mean))
 
-    //Calculate the standard deviation
-    val stddev: Array[Feature] = features
-      .map{ case (f: Array[Feature], label: Feature) => f :+ label}
+    // Calculate the standard deviation
+    val stddev: Array[Feature] = features.map{ case (f: Array[Feature], label: Feature) => f :+ label }
       .map(f => f.zip(mean).map { case (x, y) => Math.pow(x - y, 2) })
       .reduce((a, b) => a.zip(b).map { case (x, y) => x + y })
       .map(_ / m)
       .map(math.sqrt)
       .map(_.toFloat)
 
-    //Print the standard deviation
+    // Print the standard deviation
     println("Stddev: " + arrayFeatureToString(stddev))
+    println("Broadcasting")
 
-    // Normalize the features
+    // Broadcast the mean and standard deviation
+    val meanBroadcast: Broadcast[Array[Feature]] = features.sparkSession.sparkContext.broadcast(mean)
+    val stddevBroadcast: Broadcast[Array[Feature]] = features.sparkSession.sparkContext.broadcast(stddev)
+
+    // Normalize the features using the broadcast variables
     val normalizedFeatures = features.map { case (features, label) =>
       val f = features :+ label
-      val normFeatures = f.zip(mean).zip(stddev).map {
+      val normFeatures = f.zip(meanBroadcast.value).zip(stddevBroadcast.value).map {
         case ((feature, mean), stdDev) => if (stdDev != 0) (feature - mean) / stdDev else 0f
       }
-      // extract the final feature from the normalized features (this is the label)
+      // Extract the final feature (the label) and remove it from the features
       val normLabel = normFeatures.last
-      // remove the label from the normalized features
       val normFeaturesWithoutLabel = normFeatures.dropRight(1)
-      //print norm likes as
+
       (normFeaturesWithoutLabel, normLabel)
     }
+
     normalizedFeatures
   }
+
 
   //Scale the features
   val scaledFeatureDataset = scaleFeatures(featureDataset).persist()
@@ -243,21 +251,31 @@ object MLR extends App {
     cost.toFloat / (2 * m)
   }
 
-  def gradientDescent(features: Dataset[FeatureTuple], theta: Theta, alpha: Float, sigma: Float, maxIterations: Int,initial_error: Float,m: Long = amountOfDataPoints): Theta = {
-    var error = initial_error
-    var newTheta = theta
+  def gradientDescent(features: Dataset[FeatureTuple], initialTheta: Theta, alpha: Float, sigma: Float, initialError: Float, m: Long = amountOfDataPoints): Theta = {
+    var error = initialError
+    var theta = initialTheta
     var iteration = 0
 
-    while (iteration < maxIterations) {
-      newTheta = newTheta.zipWithIndex.map { case (currentTheta, j) =>
-        val h = features.map { case (f, label) =>
-          val h = f.zip(newTheta).map { case (x, y) => x * y }.sum
+    // Broadcast the initial theta
+    var thetaBroadcast: Broadcast[Theta] = features.sparkSession.sparkContext.broadcast(theta)
+
+    while (true) {
+      // Update theta
+      val newTheta = theta.zipWithIndex.map { case (currentTheta, j) =>
+        val sum = features.map { case (f, label) =>
+          val localTheta = thetaBroadcast.value
+          val h = f.zip(localTheta).map { case (x, y) => x * y }.sum
           (h - label) * f(j)
         }.reduce(_ + _)
-        currentTheta - alpha * h / m
+        currentTheta - alpha * sum / m
       }
 
-      val newCost = cost(features, newTheta)
+      // Destroy the old broadcast variable and broadcast the new theta
+      thetaBroadcast.destroy()
+      thetaBroadcast = features.sparkSession.sparkContext.broadcast(newTheta)
+
+      // Calculate new cost using the updated theta
+      val newCost = cost(features, thetaBroadcast.value, m)
       val newDelta = error - newCost
 
       println(s"Iteration: $iteration")
@@ -265,23 +283,27 @@ object MLR extends App {
       println("New error: " + newCost)
 
       if (newDelta < sigma) {
-        return newTheta
-      } else {
+        theta = thetaBroadcast.value
+        // Release the broadcast variable resources
+        thetaBroadcast.destroy()
+        return theta
+      }
+      else {
         error = newCost
+        theta = newTheta
         iteration += 1
       }
     }
-
-    newTheta
+    theta
   }
+
+
 
   //Get the amount of features (via counting the array length of the first feature tuple)
   val amountOfFeatures = scaledFeatureDataset.first()._1.length
 
   //Initialize the theta
   val theta = Array.fill(amountOfFeatures)(0f)
-
-  val originalTheta = theta
 
   //Get the initial cost
   val initialCost = cost(scaledFeatureDataset, theta)
@@ -290,7 +312,7 @@ object MLR extends App {
   featureDataset.unpersist()
 
   //Perform the gradient descent (1 to the power of -12 is the sigma)
-  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-9f, Int.MaxValue, initialCost)
+  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-9f, initialCost)
 
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))
@@ -315,8 +337,6 @@ object MLR extends App {
 
   //Print the cost
   println("Test cost: " + testCost)
-
-  print("Original theta test cost " + cost(scaledTestFeatures, originalTheta, amountOfTestFeatures))
 //
 //
   System.in.read() // Keep the application active.
