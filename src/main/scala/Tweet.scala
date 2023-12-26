@@ -3,7 +3,7 @@ import Metrics.{Tag, Likes, ID}
 //Import ujson to parse the tweets
 
 
-case class Tweet(id: ID, text: String,
+case class Tweet(id: ID, textLength: Int,
                  user: User,
                  hashTags: Array[Tag] = Array(),
                  likes: Likes = 0) {
@@ -11,12 +11,9 @@ case class Tweet(id: ID, text: String,
   //Get the number of hashtags
   def numberOfHashTags: Int = hashTags.length
 
-  //Get the length of the tweet
-  def length: Int = text.length
-
   //Overwrite the toString method to display all hashtags via mkString
   override def toString: String = {
-    s"Tweet($id, $length, ${user.screenName}, ${hashTags.mkString("[", ",", "]")}, $likes)"
+    s"Tweet($id, $textLength, ${user.screenName}, ${hashTags.mkString("[", ",", "]")}, $likes)"
   }
 
   //Change equality to only check the id
@@ -31,12 +28,12 @@ object Tweet {
   def parseTweet(json: ujson.Value): Tweet = {
     // Parse the JSON to create a Tweet object
     val id = json("id_str").str
-    val text = json("text").str
+    val textLength = json("text").str.length
     val user = User.parseUser(json("user"))
     val hashTags = json("entities")("hashtags").arr.map(_("text").str).toArray
     val likes = json("favorite_count").num.toInt
     //Return the Tweet object
-    Tweet(id, text, user, hashTags, likes)
+    Tweet(id, textLength, user, hashTags, likes)
   }
 
   // The parse method signature remains the same
@@ -65,7 +62,7 @@ object Tweet {
     // Assuming id is always at least 2 characters long and contains only hexadecimal characters
     // Extract the last 2 characters of the id
     val lastTwo = id.takeRight(2)
-    // Convert the last three characters to a number using hexadecimal base
+    // Convert the last three characters to a number using decimal base
     val number = Integer.parseInt(lastTwo, 10)
     // Use modulo to map the number to a range from 0 to 99
     number
