@@ -6,6 +6,8 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.Partitioner
 import org.apache.spark.broadcast.Broadcast
+import java.io.{BufferedWriter, FileWriter}
+
 
 import scala.annotation.tailrec
 import scala.util.control.Breaks.break
@@ -256,6 +258,12 @@ object MLR extends App {
     var theta = initialTheta
     var iteration = 0
 
+    //Generate a filename based on alpha and the amount of features
+    val filename = "error_log_" + alpha + "_" + theta.length + ".txt"
+
+    // Initialize file writer
+    val file = new BufferedWriter(new FileWriter(filename, true)) // 'true' to append data
+
     // Broadcast the initial theta
     var thetaBroadcast: Broadcast[Theta] = features.sparkSession.sparkContext.broadcast(theta)
 
@@ -281,11 +289,13 @@ object MLR extends App {
       println(s"Iteration: $iteration")
       println("Previous error: " + error)
       println("New error: " + newCost)
+      file.write(s"$iteration, $newCost\n")
 
       if (newDelta < sigma) {
         theta = thetaBroadcast.value
         // Release the broadcast variable resources
         thetaBroadcast.destroy()
+        file.close()
         return theta
       }
       else {
@@ -294,6 +304,7 @@ object MLR extends App {
         iteration += 1
       }
     }
+    file.close()
     theta
   }
 
