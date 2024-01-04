@@ -172,7 +172,6 @@ object MLR extends App {
 
     // Print the standard deviation
     println("Stddev: " + arrayFeatureToString(stddev))
-    println("Broadcasting")
 
     // Broadcast the mean and standard deviation
     val meanBroadcast: Broadcast[Array[Feature]] = features.sparkSession.sparkContext.broadcast(mean)
