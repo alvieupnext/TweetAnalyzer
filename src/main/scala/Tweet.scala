@@ -21,6 +21,9 @@ case class Tweet(id: ID, textLength: Int,
     case tweet: Tweet => tweet.id == id
     case _ => false
   }
+
+  //Change hashcode to only hash the id (used by group by)
+  override def hashCode(): Int = id.hashCode()
 }
 
 object Tweet {

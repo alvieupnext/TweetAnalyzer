@@ -9,10 +9,6 @@ import org.apache.spark.broadcast.Broadcast
 import java.io.{BufferedWriter, FileWriter}
 import org.apache.spark.sql.functions._
 
-
-import scala.annotation.tailrec
-import scala.util.control.Breaks.break
-
 object MLR extends App {
 
   val conf = new SparkConf()
@@ -127,14 +123,14 @@ object MLR extends App {
   def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Long)]): Dataset[FeatureTuple] = {
 
     //Perform a left outer join on the tweets and the tweets with hashtags
-    val tweetsWithHashTagsFeatures: Dataset[(Tweet, Long)] = tweets.joinWith(tweetsWithHashTags, tweets("id") === tweetsWithHashTags("key.id"), "left_outer")
+    val tweetsWithHashTagScore: Dataset[(Tweet, Long)] = tweets.joinWith(tweetsWithHashTags, tweets("id") === tweetsWithHashTags("key.id"), "left_outer")
       //If the tweet doesn't have a hashtag, default to 0
       .map {
         case (tweet, (hashtagTweet, hashtagScore)) if hashtagTweet != null => (tweet, hashtagScore)
         case (tweet, _) => (tweet, 0)
       }
     //Extract the features from the tweets
-    tweetsWithHashTagsFeatures.map{ case (tweet: Tweet, hashtagCount: Long) =>
+    tweetsWithHashTagScore.map{ case (tweet: Tweet, hashtagCount: Long) =>
       //Get the features from the tweet
       val tweetLength = tweet.textLength.toFloat
       val user = tweet.user
