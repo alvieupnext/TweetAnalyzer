@@ -19,7 +19,7 @@ libraryDependencies += "com.lihaoyi" %% "ujson" % "3.1.3"
 val mainClassName = "MLR"
 
 /* Define here the name of your jar */
-val outputJarName = "linreg_tweets_big.jar"
+val outputJarName = "linreg.jar"
 
 /* Make sure this is the same as scalaVersion defined above in your build.sbt */
 val sVer = "2.13.12"
