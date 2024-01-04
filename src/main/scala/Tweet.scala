@@ -16,7 +16,7 @@ case class Tweet(id: ID, textLength: Int,
     s"Tweet($id, $textLength, ${user.screenName}, ${hashTags.mkString("[", ",", "]")}, $likes)"
   }
 
-  //Change equality to only check the id
+  //Change equality to only check the id (used by group by)
   override def equals(obj: Any): Boolean = obj match {
     case tweet: Tweet => tweet.id == id
     case _ => false

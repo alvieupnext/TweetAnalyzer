@@ -1,5 +1,8 @@
 import Feature.Feature
 
+//From experiments, we have deducted that the most important features are:
+//followers count, favourites count, statuses count
+//However, other features can be added to potentially improve the model
 case class User(screenName: String, followersCount: Int,
 //                friendsCount: Int,
 //                listedCount: Int,
@@ -7,6 +10,7 @@ case class User(screenName: String, followersCount: Int,
                 statusesCount: Int,
 //                verified : Boolean
                ) {
+
   //Return the features of the User
   def features: Array[Feature] = Array(
     followersCount,

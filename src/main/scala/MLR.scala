@@ -7,6 +7,7 @@ import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.Partitioner
 import org.apache.spark.broadcast.Broadcast
 import java.io.{BufferedWriter, FileWriter}
+import org.apache.spark.sql.functions._
 
 
 import scala.annotation.tailrec
@@ -16,13 +17,18 @@ object MLR extends App {
 
   val conf = new SparkConf()
   conf.setAppName("Multivariate Linear Regression")
+  //Change mode here: local or Isabelle
+  val mode = "local"
   // Uncomment when running locally
-//  conf.setMaster("local[4]")
+  if (mode == "local"){
+    conf.setMaster("local[4]")
+  }
   val sc = new SparkContext(conf)
 
   // Create a SparkSession which is required for working with Dataset
   val spark = SparkSession.builder().config(conf).getOrCreate()
 
+  // To prevent the printing of excessive logging messages
   spark.sparkContext.setLogLevel("FATAL")
 
   // Import the implicits, this is now done from the SparkSession (not from SparkContext)
@@ -40,9 +46,11 @@ object MLR extends App {
       Tweet.getPartitionNumber(id)
     }
   }
+  // Local will use relative path, Isabelle will use absolute path
+  val tweetspath = if (mode == "local") "data/twitter/tweetsraw" else "/data/twitter/tweetsraw"
 
  // Load the possible tweets
-  val nonUniqueTweets: RDD[Tweet] = sc.textFile("/data/twitter/tweetsraw")
+  val nonUniqueTweets: RDD[Tweet] = sc.textFile(tweetspath)
     //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
     .flatMap(Tweet.parse)
 
@@ -69,19 +77,17 @@ object MLR extends App {
   //Split the tweets into a training set and a test set
   val Array(trainingTweets, testTweets) = tweets.randomSplit(Array(0.8, 0.2), randomSeed)
 
-  import org.apache.spark.sql.functions._
-
   def extractHashtagMetrics(tweets: Dataset[Tweet]): Dataset[(Tweet, Long)] = {
 
-    // Collect all the hashtags (keep them grouped by tweet)
+    // Collect all the hashtags and repartition by hashtag
     val hashtags: Dataset[(Tweet, Tag)] = tweets
       .flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase))).repartition(desiredPartitions, col("_2"))
 
 //    print("Amount of hashtags: " + hashtags.count())
 
-    // Define a DataFrame with hashtags and their counts
+    // Make a Dataset with hashtags and their counts
     val hashtagCounts: Dataset[(Tag, Long)] = hashtags
-      .groupByKey(p => p._2)// Group by hashtag and rename the column
+      .groupByKey(p => p._2)// Group by hashtag
       .count()
     // Join the original hashtags dataset with the counts
     // Here, we use a broadcast join if hashtagCounts is small to optimize the join
@@ -140,18 +146,17 @@ object MLR extends App {
     }
   }
 //
-  //Extract the features from the tweets
+  //Extract the features from the tweets (persist for scaling later)
   val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags).persist()
 
 //  println("Printing regular features:")
 //  //Print the first ten features
 //  featureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
-  //Get the amount of DataPoints (tweets). This should also persist the featureDataset
+  //Get the amount of DataPoints (tweets). This should also persist the featureDataset in local memory
   val amountOfDataPoints = featureDataset.count()
 
   //A procedure to scale the features by normalizing them
-
   def scaleFeatures(features: Dataset[FeatureTuple], m: Long = amountOfDataPoints): Dataset[FeatureTuple] = {
 
     // Calculate the mean
@@ -294,7 +299,7 @@ object MLR extends App {
   //Unpersist the scaled feature dataset
   scaledFeatureDataset.unpersist()
 
-
+  // Perform the same steps for the test set
   val testTweetsWithHashtags: Dataset[(Tweet, Long)] = extractHashtagMetrics(testTweets)
 
   //Use the testTweets to test the model
