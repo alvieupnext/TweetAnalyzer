@@ -75,9 +75,7 @@ object MLR extends App {
 
     // Collect all the hashtags (keep them grouped by tweet)
     val hashtags: Dataset[(Tweet, Tag)] = tweets
-      .flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase)))
-      //      .toDF("tweet", "hashtag") // Convert the Dataset of tuples to a DataFrame with column names
-      .repartition(desiredPartitions, col("_2"))
+      .flatMap(tweet => tweet.hashTags.map(hashtag => (tweet, hashtag.toLowerCase))).repartition(desiredPartitions, col("_2"))
 
 //    print("Amount of hashtags: " + hashtags.count())
 
@@ -85,11 +83,6 @@ object MLR extends App {
     val hashtagCounts: Dataset[(Tag, Long)] = hashtags
       .groupByKey(p => p._2)// Group by hashtag and rename the column
       .count()
-//      .count()
-//      .withColumnRenamed("count", "hashtagCount")
-    // Decrease the hashtag count by 1, since we don't want to count the hashtag in the tweet itself
-//      .withColumn("hashtagCount", $"hashtagCount" - 1)
-
     // Join the original hashtags dataset with the counts
     // Here, we use a broadcast join if hashtagCounts is small to optimize the join
     val hashtagGroupsJoined: Dataset[(Tweet, Long)] = hashtags
@@ -116,36 +109,7 @@ object MLR extends App {
       .mapValues(_._2)
       // Reduce by summing the values
       .reduceGroups(_+_)
-
     tweetScoresGrouped
-
-
-
-
-//    // Define custom partitioning logic as a UDF
-//    val getPartitionNumberUDF = udf((id: String) => {
-//      Tweet.getPartitionNumber(id)
-//    })
-
-//    // Remove the hashtag from both sides of the join
-//    val hashtagCountJoined = hashtagGroupsJoined
-//      .select($"tweet", $"hashtagCount")
-//      //Add a new column which contains the partition number
-//      .withColumn("partitionNumber", getPartitionNumberUDF($"tweet.id"))
-//      // Repartition the dataset by tweet id
-//      .repartition(desiredPartitions, col("partitionNumber"))
-//
-//    //This step should ensure that the tweets with hashtags are the same partition as the ones
-//    //without hashtags which should make inner joining them easier
-
-//    // Group the hashtag scores by tweet
-//    val tweetScoresGrouped = hashtagCountJoined
-//      .groupBy($"tweet")
-//      .agg(sum($"hashtagCount").as("totalHashtagScore"))
-//
-//    // Convert the result back to the required format: Dataset[(Tweet, Feature)]
-//    tweetScoresGrouped
-//      .as[(Tweet, Feature)]
   }
 
 
