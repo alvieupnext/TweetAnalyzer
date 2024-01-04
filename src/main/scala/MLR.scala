@@ -17,7 +17,7 @@ object MLR extends App {
   val conf = new SparkConf()
   conf.setAppName("Multivariate Linear Regression")
   // Uncomment when running locally
-  conf.setMaster("local[4]")
+//  conf.setMaster("local[4]")
   val sc = new SparkContext(conf)
 
   // Create a SparkSession which is required for working with Dataset
@@ -42,7 +42,7 @@ object MLR extends App {
   }
 
  // Load the possible tweets
-  val nonUniqueTweets: RDD[Tweet] = sc.textFile("data/twitter/tweetsraw")
+  val nonUniqueTweets: RDD[Tweet] = sc.textFile("/data/twitter/tweetsraw")
     //first parse the tweets, transform RDD to a Dataset and then get all the tweets out of the option
     .flatMap(Tweet.parse)
 
@@ -61,7 +61,7 @@ object MLR extends App {
     .reduceByKey((t1, t2) => if (t1.likes > t2.likes) t1 else t2).map(_._2).toDS().persist(StorageLevel.DISK_ONLY)
 
   //Print the amount of tweets
-  println("Amount of tweets: " + tweets.count())
+//  println("Amount of tweets: " + tweets.count())
 
   //A random seed to make sure the random split is the same every time
   val randomSeed = 42
@@ -79,7 +79,7 @@ object MLR extends App {
       //      .toDF("tweet", "hashtag") // Convert the Dataset of tuples to a DataFrame with column names
       .repartition(desiredPartitions, col("_2"))
 
-    print("Amount of hashtags: " + hashtags.count())
+//    print("Amount of hashtags: " + hashtags.count())
 
     // Define a DataFrame with hashtags and their counts
     val hashtagCounts: Dataset[(Tag, Long)] = hashtags
@@ -152,7 +152,7 @@ object MLR extends App {
   val trainingTweetsWithHashtags: Dataset[(Tweet, Long)] = extractHashtagMetrics(trainingTweets)
 
   //Print the amount of tweets with hashtags
-  println("Amount of training tweets with hashtags: " + trainingTweetsWithHashtags.count())
+//  println("Amount of training tweets with hashtags: " + trainingTweetsWithHashtags.count())
 
   def extractFeatures(tweets: Dataset[Tweet], tweetsWithHashTags: Dataset[(Tweet, Long)]): Dataset[FeatureTuple] = {
 
@@ -179,9 +179,9 @@ object MLR extends App {
   //Extract the features from the tweets
   val featureDataset: Dataset[FeatureTuple] = extractFeatures(trainingTweets, trainingTweetsWithHashtags).persist()
 
-  println("Printing regular features:")
-  //Print the first ten features
-  featureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
+//  println("Printing regular features:")
+//  //Print the first ten features
+//  featureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
   //Get the amount of DataPoints (tweets). This should also persist the featureDataset
   val amountOfDataPoints = featureDataset.count()
@@ -234,10 +234,10 @@ object MLR extends App {
   //Scale the features
   val scaledFeatureDataset = scaleFeatures(featureDataset).persist()
 
-  println("Printing scaled features:")
-
-  //Print the first ten scaled features
-  scaledFeatureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
+//  println("Printing scaled features:")
+//
+//  //Print the first ten scaled features
+//  scaledFeatureDataset.take(10).map{case (tuple: Array[Feature], dependent: Feature) => (arrayFeatureToString(tuple), dependent)}.foreach(println)
 
   //Implement the gradient descent algorithm
   //First by implementing the cost function
@@ -253,16 +253,10 @@ object MLR extends App {
     cost.toFloat / (2 * m)
   }
 
-  def gradientDescent(features: Dataset[FeatureTuple], initialTheta: Theta, alpha: Float, sigma: Float, initialError: Float, m: Long = amountOfDataPoints): Theta = {
+  def gradientDescent(features: Dataset[FeatureTuple], initialTheta: Theta, alpha: Float, sigma: Float, file: BufferedWriter, initialError: Float, m: Long = amountOfDataPoints): Theta = {
     var error = initialError
     var theta = initialTheta
     var iteration = 0
-
-    //Generate a filename based on alpha and the amount of features
-    val filename = "error_log_" + alpha + "_" + theta.length + ".txt"
-
-    // Initialize file writer
-    val file = new BufferedWriter(new FileWriter(filename, true)) // 'true' to append data
 
     // Broadcast the initial theta
     var thetaBroadcast: Broadcast[Theta] = features.sparkSession.sparkContext.broadcast(theta)
@@ -295,7 +289,6 @@ object MLR extends App {
         theta = thetaBroadcast.value
         // Release the broadcast variable resources
         thetaBroadcast.destroy()
-        file.close()
         return theta
       }
       else {
@@ -304,7 +297,6 @@ object MLR extends App {
         iteration += 1
       }
     }
-    file.close()
     theta
   }
 
@@ -322,8 +314,16 @@ object MLR extends App {
   //The cost function now has used the scaled features, so we can free up the regular features
   featureDataset.unpersist()
 
+  val alpha = 0.1f
+
+  //Generate a filename based on alpha and the amount of features
+  val filename = "error_log_" + alpha + "_" + theta.length + ".txt"
+
+  // Initialize file writer
+  val file = new BufferedWriter(new FileWriter(filename))
+
   //Perform the gradient descent (1 to the power of -12 is the sigma)
-  val newTheta = gradientDescent(scaledFeatureDataset, theta, 0.1f, 1e-9f, initialCost)
+  val newTheta = gradientDescent(scaledFeatureDataset, theta, alpha, 1e-9f, file, initialCost)
 
   //Print the new theta
   println("New theta: " + arrayFeatureToString(newTheta))
@@ -348,6 +348,12 @@ object MLR extends App {
 
   //Print the cost
   println("Test cost: " + testCost)
+
+  //Write the test cost to the file
+  file.write(s"$testCost\n")
+
+  //Close the file
+  file.close()
 //
 //
   System.in.read() // Keep the application active.
