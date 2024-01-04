@@ -1,14 +1,149 @@
 import Feature.{Feature, FeatureTuple, arrayFeatureToString}
-import Metrics.{ID, Likes, Tag}
+import Metrics.{ID, Tag, Likes}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{Dataset, KeyValueGroupedDataset, SparkSession}
+import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.Partitioner
 import org.apache.spark.broadcast.Broadcast
+
 import java.io.{BufferedWriter, FileWriter}
 import org.apache.spark.sql.functions._
 
+//From experiments, we have deducted that the most important features are:
+//followers count, favourites count, statuses count
+//However, other features can be added to potentially improve the model
+
+object Metrics {
+  type Tag = String
+  type Likes = Int
+  type ID = String
+}
+
+//Import ujson to parse the tweets
+case class Tweet(id: ID, textLength: Int,
+                 user: User,
+                 hashTags: Array[Tag] = Array(),
+                 likes: Likes = 0) {
+
+  //Get the number of hashtags
+  def numberOfHashTags: Int = hashTags.length
+
+  //Overwrite the toString method to display all hashtags via mkString
+  override def toString: String = {
+    s"Tweet($id, $textLength, ${user.screenName}, ${hashTags.mkString("[", ",", "]")}, $likes)"
+  }
+
+  //Change equality to only check the id (used by group by)
+  override def equals(obj: Any): Boolean = obj match {
+    case tweet: Tweet => tweet.id == id
+    case _ => false
+  }
+
+  //Change hashcode to only hash the id (used by group by)
+  override def hashCode(): Int = id.hashCode()
+}
+
+object Tweet {
+  // parseTweet should have a signature that accepts a ujson.Value and returns a Tweet
+  def parseTweet(json: ujson.Value): Tweet = {
+    // Parse the JSON to create a Tweet object
+    val id = json("id_str").str
+    val textLength = json("text").str.length
+    val user = User.parseUser(json("user"))
+    val hashTags = json("entities")("hashtags").arr.map(_("text").str).toArray
+    val likes = json("favorite_count").num.toInt
+    //Return the Tweet object
+    Tweet(id, textLength, user, hashTags, likes)
+  }
+
+  // The parse method signature remains the same
+  def parse(tweet: String): Option[Tweet] = {
+    //try catch
+    try {
+      // The string is in a json format, so we can use the json library to parse it
+      val jsonValue = ujson.read(tweet)
+      // Check whether the tweet is a retweet or a quoted tweet
+      (jsonValue.obj.get("retweeted_status"), jsonValue.obj.get("quoted_status")) match {
+        case (Some(retweet), _) => Some(parseTweet(retweet))
+        case (_, Some(quote)) => Some(parseTweet(quote))
+        // If it is not a retweet or a quoted tweet, return None
+        case _ => None
+      }
+    } catch {
+      // If the parsing fails, return None, but print the tweet
+      case e: Exception =>
+        //        println(s"Failed to parse tweet: $tweet")
+        //        println(e)
+        None
+    }
+  }
+
+  def getPartitionNumber(id: ID): Int = {
+    // Assuming id is always at least 2 characters long and contains only hexadecimal characters
+    // Extract the last 2 characters of the id
+    val lastTwo = id.takeRight(2)
+    // Convert the last three characters to a number using decimal base
+    val number = Integer.parseInt(lastTwo, 10)
+    // Use modulo to map the number to a range from 0 to 99
+    number
+  }
+
+}
+
+case class User(screenName: String, followersCount: Int,
+                //                friendsCount: Int,
+                //                listedCount: Int,
+                favoritesCount: Int,
+                statusesCount: Int,
+                //                verified : Boolean
+               ) {
+
+  //Return the features of the User
+  def features: Array[Feature] = Array(
+    followersCount,
+    //    friendsCount,
+    //        listedCount,
+    statusesCount,
+    favoritesCount,
+    //    if (verified) 1f else 0f
+  )
+}
+
+
+object User {
+  def parseUser(json: ujson.Value): User = {
+    val screenName = json("screen_name").str
+    val followersCount = json("followers_count").num.toInt
+    //    val friendsCount = json("friends_count").num.toInt
+    //    val listedCount = json("listed_count").num.toInt
+    val favoritesCount = json("favourites_count").num.toInt
+    val statusesCount = json("statuses_count").num.toInt
+    //    val verified = json("verified").bool
+    User(screenName, followersCount,
+      //      friendsCount, listedCount,
+      favoritesCount, statusesCount
+      //      verified
+    )
+  }
+}
+
+object Feature {
+  type Feature = Float
+  //These are the features we will use to train our model
+  //The features are text length,
+  //From the user: followers count, favourites count, statuses count,
+  //The final dependent is the amount of likes
+
+  //Create an Array[Feature] type which prints as a string
+  def arrayFeatureToString(features: Array[Feature]): String = features.mkString("[", ",", "]")
+  type FeatureTuple = (Array[Feature], Feature)
+
+}
+
+
+
+//Main application for the Multivariate Linear Regression
 object MLR extends App {
 
   val conf = new SparkConf()
